@@ -1,27 +1,26 @@
-// import './gpt/index';
 import React, { useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import { Hello } from "./Hello";
-import { ReactCompartmentC } from "./Container";
+import { ReactCompartment } from "./Container";
 
 const App = () => {
   const [greeting, setGreeting] = useState('haay');
   const onInputReady = useCallback((el) => {
-    // if (el) {
-      console.log('onInputReady', el)
-    // }
+    if (el) {
+      console.log('virtual input ready', el)
+    }
   }, [])
   return (
     <>
-    <ReactCompartmentC>
+    <ReactCompartment>
       <input value={greeting} ref={onInputReady} onChange={({ target: { value } }) => {
         console.log('input.onChange', value)
         setGreeting(value)
       }}/>
-    </ReactCompartmentC>
-    <ReactCompartmentC>
+    </ReactCompartment>
+    <ReactCompartment>
       <Hello greeting={greeting}/>
-    </ReactCompartmentC>
+    </ReactCompartment>
     </>
   )
 }
