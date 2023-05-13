@@ -1,20 +1,13 @@
-import { useMemo, useCallback } from "react";
+import { useMemo } from "react";
 
 
 export const Hello = ({ greeting = 'haay' }) => {
 
   const message = useMemo(() => {
-    // console.log('greeter memo', greeting)
     return `${greeting} wuurl`;
   }, [greeting]);
 
-  const refReady = useCallback((el) => {
-    if (el) {
-      // console.log('h1 ref ready', el)
-    }
-  })
-
   return (
-    <h1 ref={refReady}>{message}</h1>
+    <h1>{message}</h1>
   )
 };

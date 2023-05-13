@@ -2,9 +2,9 @@
 import { renderToString } from 'react-dom/server';
 import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
-import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
 import { JSDOM } from 'jsdom';
-import { useCallback, createElement } from 'react';
+import React, { useCallback, useState, createElement } from 'react';
 
 // FYI: in some cases in its code (not witnessed) react may use the global document
 
@@ -19,37 +19,70 @@ import { useCallback, createElement } from 'react';
 // );
 
 export function ReactCompartment({ children } = {}) {
+  const [virtualContainer, setVirtualContainer] = useState(null)
+  
+  // after the section is mounted, we can create a virtual container
   const onSectionReady = useCallback((containerRoot) => {
     if (!containerRoot) return;
-    // create virtual dom for containerized element
-    // with event forwarding
     const { container } = createVirtualContainer({ containerRoot })
-    // setup continuous rendering into vdom for this container
-    const root = createRoot(container);
-    root.render(children);
+    setVirtualContainer(container);
   }, [])
 
   // every pass we render to string, purify, and then render to vdom
   const html = renderToString(children);
-  if (html === '') {
-    return [];
-  }
   const safeHtml = DOMPurify.sanitize(html)
-  console.log('safeHtml', safeHtml)
   const domTree = htmlToDOM(safeHtml, {
     lowerCaseAttributeNames: false
   })
-  const reactTree = domToReact(domTree, {})
+  const reactTree = domToReact(domTree, { library: React })
 
-  return createElement('section', {
-    ref: onSectionReady,
-  }, reactTree)
+  return (
+    createElement('section', {
+      ref: onSectionReady,
+    }, [
+      // render the virtual container in jsdom
+      virtualContainer && createPortal(children, virtualContainer, 'virtual-container'),
+      // render the sandboxed html
+      reactTree,
+    ])
+  )
 }
 
+// creates a copy of a real event with mapped virtual elements
+const mapEventToVirtual = (event, mapRealToVirtual) => {
+  const target = mapRealToVirtual(event.target)
+  const mappedEvent = {
+    target,
+    srcElement: target,
+  }
+  for (let key in event) {
+    if (key === 'target' || key === 'srcElement') continue;
+    const value = event[key];
+    const type = typeof value;
+    // handle basic types
+    if (type === 'string' || type === 'number') {
+      mappedEvent[key] = value;
+      continue;
+    }
+    // dont pass most non-basic types
+    if (type === 'function') continue;
+    if (type === 'symbol') continue;
+    if (type === 'object') continue;
+    // map elements
+    if (value instanceof Element) {
+      mappedEvent[key] = mapRealToVirtual(value);
+      continue;
+    };
+  }
+  return mappedEvent;
+}
+
+// creates a virtual dom for a containerized component
+// with event forwarding
 function createVirtualContainer ({ containerRoot }) {
 
   const fakeDom = new JSDOM('<!doctype html><html><body></body></html>', {
-    url: 'http://fake.website/',
+    url: 'http://containerized-component.fake.website/',
   });
 
   const { document: compartmentDocument } = fakeDom.window;
@@ -62,6 +95,8 @@ function createVirtualContainer ({ containerRoot }) {
   realToVirtualMap.set(containerRoot, container);
   virtualToRealMap.set(container, containerRoot);
 
+  // generic protocol for mapping across the real/virtual boundary
+  // may not be sane! idk!
   // this will populate the map for all encountered elements
   const mapAcross = (targetNode, ceilingNode, thisToThatMap, thatToThisMap) => {
     let knownAncestorCandidate = targetNode
@@ -88,6 +123,10 @@ function createVirtualContainer ({ containerRoot }) {
       const childThis = path.pop();
       const childKey = pathKeys.pop();
       const childThat = currentThat.childNodes[childKey];
+      // corresponding child is missing
+      if (!childThat) {
+        return
+      }
       thisToThatMap.set(childThis, childThat);
       thatToThisMap.set(childThat, childThis);
       currentThat = childThat;
@@ -122,22 +161,17 @@ function createVirtualContainer ({ containerRoot }) {
       return
     }
 
-    const wrappedListener = (event) => {
-      const target = mapRealToVirtual(event.target)
-      const mappedEvent = {
-        ...event,
-        target,
-        srcElement: target,
-      }
+    const wrappedListener = (realEvent) => {
+      const mappedEvent = mapEventToVirtual(realEvent, mapRealToVirtual)
       // special case: handle input/change events
       if (eventName === 'input' || eventName === 'change') {
         // need to update the input so "input" event gets upgraded to "onChange"
         // need to disable the tracker so it doesnt record the change
-        const virtualInput = target
+        const virtualInput = mappedEvent.target
         if (virtualInput._valueTracker) {
           virtualInput._valueTracker.stopTracking();
         }
-        virtualInput.value = event.target.value;
+        virtualInput.value = realEvent.target.value;
       }
       listener(mappedEvent)
     }
