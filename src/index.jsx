@@ -3,12 +3,13 @@ import { createRoot } from "react-dom/client";
 import { Hello } from "./Hello";
 import { ChatHistory } from "./ChatHistory";
 // import { useInterval } from "./useInterval";
-import { ReactCompartment, withReactCompartmentPortal } from "./Container";
+import { ReactCompartmentOpaqueChildrenPortal, ReactCompartmentOpaqueChildrenRoot, ReactCompartmentPortal, ReactCompartmentRoot, withReactCompartmentPortal, withReactCompartmentRoot } from "./Container";
 // const ReactCompartment = ({ children }) => {
 //   return children;
 // }
 
-const SafeHello = withReactCompartmentPortal(Hello)
+const PortalHello = withReactCompartmentPortal(Hello)
+const RootHello = withReactCompartmentRoot(Hello)
 
 const App = () => {
   const [greeting, setGreeting] = useState('haay');
@@ -60,28 +61,46 @@ const App = () => {
 
   return (
     <>
-      <ReactCompartment>
+      <ReactCompartmentPortal>
         <input
           ref={onInputReady}
           value={greeting}
           onChange={onChange}
           onKeyDown={onKeyDown}
         />
-      </ReactCompartment>
-      <ReactCompartment>
+      </ReactCompartmentPortal>
+      <ReactCompartmentPortal>
         <button onClick={submit}>submit</button>
-      </ReactCompartment>
+      </ReactCompartmentPortal>
       
-      <ReactCompartment>
+      <ReactCompartmentPortal>
         <Hello greeting={greeting}/>
-      </ReactCompartment>
-      
-      <SafeHello greeting={greeting}/>
+      </ReactCompartmentPortal>
+      <ReactCompartmentRoot>
+        <Hello greeting={greeting}/>
+      </ReactCompartmentRoot>
 
-      
-      <ReactCompartment>
+      <PortalHello greeting={greeting}/>
+      <RootHello greeting={greeting}/>
+
+      <ReactCompartmentOpaqueChildrenPortal>
+        <Hello greeting={greeting}/>
+      </ReactCompartmentOpaqueChildrenPortal>
+      <ReactCompartmentOpaqueChildrenRoot>
+        <Hello greeting={greeting}/>
+      </ReactCompartmentOpaqueChildrenRoot>
+
+
+      <ReactCompartmentPortal>
         <ChatHistory chatLog={chatLog}/>
-      </ReactCompartment>
+      </ReactCompartmentPortal>
+
+      <ReactCompartmentOpaqueChildrenPortal>
+        <ChatHistory chatLog={chatLog}/>
+      </ReactCompartmentOpaqueChildrenPortal>
+      <ReactCompartmentOpaqueChildrenRoot>
+        <ChatHistory chatLog={chatLog}/>
+      </ReactCompartmentOpaqueChildrenRoot>
     </>
   )
 }

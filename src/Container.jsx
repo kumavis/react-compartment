@@ -4,7 +4,8 @@ import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
 import { createPortal } from 'react-dom';
 import { JSDOM } from 'jsdom';
-import React, { useCallback, useState, createElement, memo } from 'react';
+import React, { useCallback, useState, createElement, memo, Children, useEffect } from 'react';
+import { createRoot } from 'react-dom/client';
 
 // FYI: in some cases in its code (not witnessed) react may use the global document
 
@@ -18,6 +19,105 @@ import React, { useCallback, useState, createElement, memo } from 'react';
 //   }
 // );
 
+const getRandomId = () => {
+  return Math.random().toString(36).substring(7);
+}
+
+const opaqueIdMap = new Map();
+
+const OpaqueElement = ({ opaqueElementId }) => {
+  useEffect(() => {
+    return () => {
+      opaqueIdMap.delete(opaqueElementId);
+    }
+  }, [])
+  const elementName = `x-opaque-${opaqueElementId}`
+  return createElement(elementName, null);
+}
+
+const toOpaque = (element) => {
+  const opaqueElementId = getRandomId();
+  const opaqueElement = createElement(OpaqueElement, { opaqueElementId })
+  opaqueIdMap.set(opaqueElementId, element);
+  return opaqueElement;
+}
+
+const fromOpaqueId = (opaqueElementId) => {
+  if (!opaqueIdMap.has(opaqueElementId)) {
+    throw new Error('no match found for opaque element')
+  }
+  return opaqueIdMap.get(opaqueElementId);
+}
+
+const jsDomNodeToSanitizedReactTree = (node) => {
+  const html = node.innerHTML;
+  const safeHtml = DOMPurify.sanitize(html, {
+    CUSTOM_ELEMENT_HANDLING: {
+      tagNameCheck: (tagName) => tagName.startsWith('x-opaque-'),
+    }
+  })
+  const domTree = htmlToDOM(safeHtml, {
+    lowerCaseAttributeNames: false
+  })
+  const reactTree = domToReact(domTree, {
+    library: React,
+    replace: (domNode) => {
+      if (domNode.tagName?.startsWith('x-opaque-')) {
+        const opaqueElementId = domNode.tagName.replace('x-opaque-', '')
+        return fromOpaqueId(opaqueElementId);
+      }
+    },
+  })
+  return reactTree;
+}
+
+
+export function withReactCompartmentRoot(Component, alternatePropsAreEqualFn) {
+  return function ReactCompartmentWrapper(props) {
+    const [virtualEnvironment, setVirtualEnvironment] = useState(null)
+    const [reactTree, setReactTree] = useState(null)
+
+    // after the container is mounted, we can create a virtual container
+    const onContainerReady = useCallback((containerRoot) => {
+      if (!containerRoot) return;
+      const { container } = createVirtualContainer({
+        containerRoot,
+        onMutation: () => {
+          const newTree = jsDomNodeToSanitizedReactTree(container)
+          setReactTree(newTree)
+        }
+      })
+      const virtualRoot = createRoot(container);
+      const MemoizedComponent = memo(Component, alternatePropsAreEqualFn)
+      const render = (props) => {
+        virtualRoot.render(createElement(MemoizedComponent, props))
+      }
+      setVirtualEnvironment({ render });
+    }, [])
+
+    if (virtualEnvironment) {
+      virtualEnvironment.render(props);
+    }
+
+    return (
+      createElement('div', {
+        ref: onContainerReady,
+      }, [
+        // render the sandboxed html
+        reactTree,
+      ])
+    )
+  }
+}
+
+export const ReactCompartmentRoot = withReactCompartmentRoot(({ children }) => {
+  return createElement(
+    React.Fragment,
+    null,
+    children
+  )
+})
+
 // this is the more correct model over a component will children because
 // parent compartments arent re-rendered when their children are
 export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) {
@@ -25,23 +125,21 @@ export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) 
     const [virtualEnvironment, setVirtualEnvironment] = useState(null)
     const [reactTree, setReactTree] = useState(null)
 
-    // after the section is mounted, we can create a virtual container
-    const onSectionReady = useCallback((containerRoot) => {
+    // after the container is mounted, we can create a virtual container
+    const onContainerReady = useCallback((containerRoot) => {
       if (!containerRoot) return;
       const { container } = createVirtualContainer({
         containerRoot,
         onMutation: () => {
-          const html = container.outerHTML;
-          const safeHtml = DOMPurify.sanitize(html)
-          const domTree = htmlToDOM(safeHtml, {
-            lowerCaseAttributeNames: false
-          })
-          const reactTree = domToReact(domTree, { library: React })
-          setReactTree(reactTree)
+          const newTree = jsDomNodeToSanitizedReactTree(container)
+          setReactTree(newTree)
         }
       })
-      // We use memo to prevent the component from re-rendering
-      // when the update is triggered.
+      // When the wrapper renders it will rerender the child
+      // if the child makes a change to its jsdom it will trigger a mutation
+      // which will trigger a rerender of the wrapper
+      // which would rerender the child
+      // so we need to memoize the child to break the loop
       const MemoizedComponent = memo(Component, alternatePropsAreEqualFn)
       setVirtualEnvironment({
         container,
@@ -50,8 +148,8 @@ export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) 
     }, [])
 
     return (
-      createElement('section', {
-        ref: onSectionReady,
+      createElement('div', {
+        ref: onContainerReady,
       }, [
         // render the virtual container in jsdom
         virtualEnvironment && createPortal(
@@ -66,13 +164,34 @@ export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) 
   }
 }
 
-export const ReactCompartment = withReactCompartmentPortal(({ children }) => {
+export const ReactCompartmentPortal = withReactCompartmentPortal(({ children }) => {
   return createElement(
     React.Fragment,
     null,
     children
   )
 })
+
+// TODO: this is not useful other than for testing
+// its rendering a fragment with opaque children
+// to the jsdom and then replacing the opaque children
+// with the real children when rending to the page
+export const ReactCompartmentOpaqueChildrenRoot = withReactCompartmentRoot(({ children }) => {
+  return createElement(
+    React.Fragment,
+    null,
+    Children.map(children, toOpaque)
+  )
+})
+
+export const ReactCompartmentOpaqueChildrenPortal = withReactCompartmentPortal(({ children }) => {
+  return createElement(
+    React.Fragment,
+    null,
+    Children.map(children, toOpaque)
+  )
+})
+
 
 // creates a copy of a real event with mapped virtual elements
 const mapEventToVirtual = (event, mapRealToVirtual) => {
