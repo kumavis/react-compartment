@@ -1,5 +1,4 @@
 
-import { renderToString } from 'react-dom/server';
 import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
 import { createPortal } from 'react-dom';
@@ -8,6 +7,8 @@ import React, { useCallback, useState, createElement, memo, Children, useEffect 
 import { createRoot } from 'react-dom/client';
 
 // FYI: in some cases in its code (not witnessed) react may use the global document
+// I think this is mostly for setting up debug helpers
+// To verify, React should be executed in a Compartment
 
 // DOMPurify.addHook(
 //   'beforeSanitizeElements',
@@ -19,18 +20,31 @@ import { createRoot } from 'react-dom/client';
 //   }
 // );
 
+/*
+TODO:
+- [ ] fix event mapping bug, as seen when using the example input
+- [ ] namespace opaqueIdMap by ReactCompartment
+- [ ] improve example, use a Compartment
+- [ ] always treat children as opaque (?)
+- [ ] rename { ReactCompartmentRoot, ReactCompartmentPortal } as { RootFragment, PortalFragment }
+*/
+
 const getRandomId = () => {
   return Math.random().toString(36).substring(7);
 }
 
 const opaqueIdMap = new Map();
 
-const OpaqueElement = ({ opaqueElementId }) => {
+const useCleanup = (callback) => {
   useEffect(() => {
-    return () => {
-      opaqueIdMap.delete(opaqueElementId);
-    }
+    return callback;
   }, [])
+}
+
+const OpaqueElement = ({ opaqueElementId }) => {
+  useCleanup(() => {
+    opaqueIdMap.delete(opaqueElementId);
+  })
   const elementName = `x-opaque-${opaqueElementId}`
   return createElement(elementName, null);
 }
