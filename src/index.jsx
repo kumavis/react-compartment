@@ -3,12 +3,12 @@ import { createRoot } from "react-dom/client";
 import { Hello } from "./Hello";
 import { ChatHistory } from "./ChatHistory";
 // import { useInterval } from "./useInterval";
-import { ReactCompartment, withReactCompartment } from "./Container";
+import { ReactCompartment, withReactCompartmentPortal } from "./Container";
 // const ReactCompartment = ({ children }) => {
 //   return children;
 // }
 
-const SafeHello = withReactCompartment(Hello)
+const SafeHello = withReactCompartmentPortal(Hello)
 
 const App = () => {
   const [greeting, setGreeting] = useState('haay');
@@ -72,9 +72,9 @@ const App = () => {
         <button onClick={submit}>submit</button>
       </ReactCompartment>
       
-      {/* <ReactCompartment>
+      <ReactCompartment>
         <Hello greeting={greeting}/>
-      </ReactCompartment> */}
+      </ReactCompartment>
       
       <SafeHello greeting={greeting}/>
 

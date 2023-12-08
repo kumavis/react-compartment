@@ -20,7 +20,7 @@ import React, { useCallback, useState, createElement, memo } from 'react';
 
 // this is the more correct model over a component will children because
 // parent compartments arent re-rendered when their children are
-export function withReactCompartment(Component, alternatePropsAreEqualFn) {
+export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) {
   return function ReactCompartmentWrapper(props) {
     const [virtualEnvironment, setVirtualEnvironment] = useState(null)
     const [reactTree, setReactTree] = useState(null)
@@ -66,35 +66,13 @@ export function withReactCompartment(Component, alternatePropsAreEqualFn) {
   }
 }
 
-export function ReactCompartment({ children } = {}) {
-  const [virtualContainer, setVirtualContainer] = useState(null)
-  
-  // after the section is mounted, we can create a virtual container
-  const onSectionReady = useCallback((containerRoot) => {
-    if (!containerRoot) return;
-    const { container } = createVirtualContainer({ containerRoot })
-    setVirtualContainer(container);
-  }, [])
-
-  // every pass we render to string, purify, and then render to vdom
-  const html = renderToString(children);
-  const safeHtml = DOMPurify.sanitize(html)
-  const domTree = htmlToDOM(safeHtml, {
-    lowerCaseAttributeNames: false
-  })
-  const reactTree = domToReact(domTree, { library: React })
-
-  return (
-    createElement('section', {
-      ref: onSectionReady,
-    }, [
-      // render the virtual container in jsdom
-      virtualContainer && createPortal(children, virtualContainer, 'virtual-container'),
-      // render the sandboxed html
-      reactTree,
-    ])
+export const ReactCompartment = withReactCompartmentPortal(({ children }) => {
+  return createElement(
+    React.Fragment,
+    null,
+    children
   )
-}
+})
 
 // creates a copy of a real event with mapped virtual elements
 const mapEventToVirtual = (event, mapRealToVirtual) => {
