@@ -4,7 +4,7 @@ import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
 import { createPortal } from 'react-dom';
 import { JSDOM } from 'jsdom';
-import React, { useCallback, useState, createElement } from 'react';
+import React, { useCallback, useState, createElement, useMemo, memo } from 'react';
 
 // FYI: in some cases in its code (not witnessed) react may use the global document
 
@@ -17,6 +17,69 @@ import React, { useCallback, useState, createElement } from 'react';
 //     return currentNode;
 //   }
 // );
+
+// this is the more correct model over a component will children because
+// parent compartments arent re-rendered when their children are
+// TODO: this will not update when Component child state is updated.
+export function withReactCompartment(Component) {
+  return function ReactCompartmentWrapper(props) {
+    const [virtualEnvironment, setVirtualEnvironment] = useState(null)
+    const [updateTracker, setUpdateTracker] = useState(0)
+
+    // after the section is mounted, we can create a virtual container
+    const onSectionReady = useCallback((containerRoot) => {
+      if (!containerRoot) return;
+      const { container } = createVirtualContainer({ containerRoot })
+      const triggerUpdate = () => {
+        setTimeout(() => {
+          setUpdateTracker(id => id + 1)
+        })
+      }
+      // many hacks:
+      // 1. We wrap the component in a function that triggers an update.
+      // This function will get called whenever Component would be,
+      // including when its internal state is updated.
+      // 2. We use memo to prevent the component from re-rendering
+      // when the update is triggered.
+      const WrappedComponent = memo((...args) => {
+        const result = Component(...args)
+        triggerUpdate()
+        return result
+      })
+      setVirtualEnvironment({
+        container,
+        WrappedComponent,
+      });
+    }, [])
+
+    const reactTree = useMemo(() => {
+      if (!virtualEnvironment) return
+      const html = virtualEnvironment.container.outerHTML;
+      const safeHtml = DOMPurify.sanitize(html)
+      const domTree = htmlToDOM(safeHtml, {
+        lowerCaseAttributeNames: false
+      })
+      const reactTree = domToReact(domTree, { library: React })
+      return reactTree
+    }, [updateTracker])
+
+    return (
+      createElement('section', {
+        ref: onSectionReady,
+      }, [
+        // render the virtual container in jsdom
+        virtualEnvironment && createPortal(
+          createElement(virtualEnvironment.WrappedComponent, props),
+          virtualEnvironment.container,
+          'virtual-container'
+        ),
+        // render the sandboxed html
+        reactTree,
+        updateTracker,
+      ])
+    )
+  }
+}
 
 export function ReactCompartment({ children } = {}) {
   const [virtualContainer, setVirtualContainer] = useState(null)
@@ -80,7 +143,7 @@ const mapEventToVirtual = (event, mapRealToVirtual) => {
 // creates a virtual dom for a containerized component
 // with event forwarding
 function createVirtualContainer ({ containerRoot }) {
-
+  // TODO: consider "JSDOM.fragment"
   const fakeDom = new JSDOM('<!doctype html><html><body></body></html>', {
     url: 'http://containerized-component.fake.website/',
   });
