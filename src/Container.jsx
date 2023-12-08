@@ -4,7 +4,7 @@ import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
 import { createPortal } from 'react-dom';
 import { JSDOM } from 'jsdom';
-import React, { useCallback, useState, createElement, useMemo, memo } from 'react';
+import React, { useCallback, useState, createElement, memo } from 'react';
 
 // FYI: in some cases in its code (not witnessed) react may use the global document
 
@@ -20,48 +20,34 @@ import React, { useCallback, useState, createElement, useMemo, memo } from 'reac
 
 // this is the more correct model over a component will children because
 // parent compartments arent re-rendered when their children are
-// TODO: this will not update when Component child state is updated.
-export function withReactCompartment(Component) {
+export function withReactCompartment(Component, alternatePropsAreEqualFn) {
   return function ReactCompartmentWrapper(props) {
     const [virtualEnvironment, setVirtualEnvironment] = useState(null)
-    const [updateTracker, setUpdateTracker] = useState(0)
+    const [reactTree, setReactTree] = useState(null)
 
     // after the section is mounted, we can create a virtual container
     const onSectionReady = useCallback((containerRoot) => {
       if (!containerRoot) return;
-      const { container } = createVirtualContainer({ containerRoot })
-      const triggerUpdate = () => {
-        setTimeout(() => {
-          setUpdateTracker(id => id + 1)
-        })
-      }
-      // many hacks:
-      // 1. We wrap the component in a function that triggers an update.
-      // This function will get called whenever Component would be,
-      // including when its internal state is updated.
-      // 2. We use memo to prevent the component from re-rendering
-      // when the update is triggered.
-      const WrappedComponent = memo((...args) => {
-        const result = Component(...args)
-        triggerUpdate()
-        return result
+      const { container } = createVirtualContainer({
+        containerRoot,
+        onMutation: () => {
+          const html = container.outerHTML;
+          const safeHtml = DOMPurify.sanitize(html)
+          const domTree = htmlToDOM(safeHtml, {
+            lowerCaseAttributeNames: false
+          })
+          const reactTree = domToReact(domTree, { library: React })
+          setReactTree(reactTree)
+        }
       })
+      // We use memo to prevent the component from re-rendering
+      // when the update is triggered.
+      const MemoizedComponent = memo(Component, alternatePropsAreEqualFn)
       setVirtualEnvironment({
         container,
-        WrappedComponent,
+        Component: MemoizedComponent,
       });
     }, [])
-
-    const reactTree = useMemo(() => {
-      if (!virtualEnvironment) return
-      const html = virtualEnvironment.container.outerHTML;
-      const safeHtml = DOMPurify.sanitize(html)
-      const domTree = htmlToDOM(safeHtml, {
-        lowerCaseAttributeNames: false
-      })
-      const reactTree = domToReact(domTree, { library: React })
-      return reactTree
-    }, [updateTracker])
 
     return (
       createElement('section', {
@@ -69,13 +55,12 @@ export function withReactCompartment(Component) {
       }, [
         // render the virtual container in jsdom
         virtualEnvironment && createPortal(
-          createElement(virtualEnvironment.WrappedComponent, props),
+          createElement(virtualEnvironment.Component, props),
           virtualEnvironment.container,
           'virtual-container'
         ),
         // render the sandboxed html
         reactTree,
-        updateTracker,
       ])
     )
   }
@@ -142,7 +127,7 @@ const mapEventToVirtual = (event, mapRealToVirtual) => {
 
 // creates a virtual dom for a containerized component
 // with event forwarding
-function createVirtualContainer ({ containerRoot }) {
+function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
   // TODO: consider "JSDOM.fragment"
   const fakeDom = new JSDOM('<!doctype html><html><body></body></html>', {
     url: 'http://containerized-component.fake.website/',
@@ -152,6 +137,18 @@ function createVirtualContainer ({ containerRoot }) {
   const container = compartmentDocument.createElement('div');
   container.id = 'root';
   compartmentDocument.body.appendChild(container);
+
+  const mutationObserver = new fakeDom.window.MutationObserver((mutations, observer) => {
+    onMutation();
+  });
+  mutationObserver.observe(container, {
+    attributes: true,
+    characterData: true,
+    childList: true,
+    subtree: true,
+    attributeOldValue: true,
+    characterDataOldValue: true
+  });
 
   const virtualToRealMap = new WeakMap();
   const realToVirtualMap = new WeakMap();
