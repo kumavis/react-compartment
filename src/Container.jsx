@@ -1,9 +1,8 @@
-
 import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
 import { createPortal } from 'react-dom';
 import { JSDOM } from 'jsdom';
-import React, { useCallback, useState, createElement, memo, Children, useEffect } from 'react';
+import React, { useCallback, useState, createElement, memo, Children, useEffect, cloneElement } from 'react';
 import { createRoot } from 'react-dom/client';
 
 // FYI: in some cases in its code (not witnessed) react may use the global document
@@ -27,7 +26,12 @@ TODO:
 - [ ] improve example, use a Compartment
 - [ ] always treat children as opaque (?)
 - [ ] rename { ReactCompartmentRoot, ReactCompartmentPortal } as { RootFragment, PortalFragment }
+- [ ] consider opaque props
 */
+
+const domToReactOptions = {
+  library: React,
+}
 
 const getRandomId = () => {
   return Math.random().toString(36).substring(7);
@@ -63,8 +67,29 @@ const fromOpaqueId = (opaqueElementId) => {
   return opaqueIdMap.get(opaqueElementId);
 }
 
-const jsDomNodeToSanitizedReactTree = (node) => {
-  const html = node.innerHTML;
+// https://github.com/remarkablemark/html-react-parser/blob/84930100f5b96bc4f73fecaf6666143678494aa9/src/attributes-to-props.ts#L12-L13
+const CONTROLLABLE_COMPONENT_TAGS = ['input', 'select', 'textarea'];
+const CONTROLLABLE_COMPONENT_ATTRIBUTES = ['checked', 'value'];
+const valueOnlyInputTypes = {
+  reset: true,
+  submit: true,
+};
+
+const isControllableElement = (domHandlerNode) => {
+  const result = (
+    // is controllable component
+    CONTROLLABLE_COMPONENT_TAGS.includes(domHandlerNode.name) &&
+    // is NOT form submit/reset input type
+    !(domHandlerNode.name === 'input' && valueOnlyInputTypes[domHandlerNode.type]) &&
+    // has controllable attribute
+    CONTROLLABLE_COMPONENT_ATTRIBUTES.some((propName) => propName in domHandlerNode.attribs)
+  );
+  console.log('isControllableElement', result, domHandlerNode)
+  return result
+}
+
+const compartmentTreeToSafeTree = (jsDomNode, reactNode, opts) => {
+  const html = jsDomNode.innerHTML;
   const safeHtml = DOMPurify.sanitize(html, {
     CUSTOM_ELEMENT_HANDLING: {
       tagNameCheck: (tagName) => tagName.startsWith('x-opaque-'),
@@ -74,19 +99,56 @@ const jsDomNodeToSanitizedReactTree = (node) => {
     lowerCaseAttributeNames: false
   })
   const reactTree = domToReact(domTree, {
-    library: React,
-    replace: (domNode) => {
-      if (domNode.tagName?.startsWith('x-opaque-')) {
-        const opaqueElementId = domNode.tagName.replace('x-opaque-', '')
+    ...domToReactOptions,
+    replace: (domHandlerNode) => {
+      // replace opaque elements with their real counterparts
+      if (domHandlerNode.name?.startsWith('x-opaque-')) {
+        const opaqueElementId = domHandlerNode.name.replace('x-opaque-', '')
         return fromOpaqueId(opaqueElementId);
       }
+      // workaround:
+      // controlled and uncontrollable elements (<input>) are rendered as the same html
+      // "domToReact" defaults to uncontrolled elements
+      // thats normally a good idea but we want to preserve the original intent
+      if (isControllableElement(domHandlerNode)) {
+        // TODO: we need to look at the original and see if it was controlled
+        // instead of using this hardcoded option
+        if (opts.inputsAreControlled) {
+          let reactNode = domToReact([domHandlerNode], domToReactOptions)
+          if ('value' in domHandlerNode.attribs) {
+            reactNode = cloneElement(reactNode, {
+              ...reactNode.props,
+              value: reactNode.props.defaultValue,
+              defaultValue: undefined,
+            })
+          }
+          if ('checked' in domHandlerNode.attribs) {
+            reactNode = cloneElement(reactNode, {
+              ...reactNode.props,
+              checked: reactNode.props.defaultChecked,
+              defaultChecked: undefined,
+            })
+          }
+          return reactNode
+        }
+      }
     },
+    transform: (reactNode, domNode) => {
+      debugger
+      return reactNode
+    },
+  })
+  console.log('compartmentTreeToSafeTree', {
+    html,
+    safeHtml,
+    domTree,
+    reactTree,
   })
   return reactTree;
 }
 
 
-export function withReactCompartmentRoot(Component, alternatePropsAreEqualFn) {
+export function withReactCompartmentRoot(Component, opts = {}) {
   return function ReactCompartmentWrapper(props) {
     const [virtualEnvironment, setVirtualEnvironment] = useState(null)
     const [reactTree, setReactTree] = useState(null)
@@ -94,17 +156,20 @@ export function withReactCompartmentRoot(Component, alternatePropsAreEqualFn) {
     // after the container is mounted, we can create a virtual container
     const onContainerReady = useCallback((containerRoot) => {
       if (!containerRoot) return;
+      let lastCompartmentRenderResult;
       const { container } = createVirtualContainer({
         containerRoot,
         onMutation: () => {
-          const newTree = jsDomNodeToSanitizedReactTree(container)
+          const newTree = compartmentTreeToSafeTree(container, lastCompartmentRenderResult, opts)
           setReactTree(newTree)
         }
       })
       const virtualRoot = createRoot(container);
-      const MemoizedComponent = memo(Component, alternatePropsAreEqualFn)
+      const { propsAreEqual } = opts;
+      const MemoizedComponent = memo(Component, propsAreEqual)
       const render = (props) => {
-        virtualRoot.render(createElement(MemoizedComponent, props))
+        lastCompartmentRenderResult = createElement(MemoizedComponent, props)
+        virtualRoot.render(lastCompartmentRenderResult)
       }
       setVirtualEnvironment({ render });
     }, [])
@@ -124,17 +189,9 @@ export function withReactCompartmentRoot(Component, alternatePropsAreEqualFn) {
   }
 }
 
-export const ReactCompartmentRoot = withReactCompartmentRoot(({ children }) => {
-  return createElement(
-    React.Fragment,
-    null,
-    children
-  )
-})
-
 // this is the more correct model over a component will children because
 // parent compartments arent re-rendered when their children are
-export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) {
+export function withReactCompartmentPortal(Component, opts = {}) {
   return function ReactCompartmentWrapper(props) {
     const [virtualEnvironment, setVirtualEnvironment] = useState(null)
     const [reactTree, setReactTree] = useState(null)
@@ -142,10 +199,11 @@ export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) 
     // after the container is mounted, we can create a virtual container
     const onContainerReady = useCallback((containerRoot) => {
       if (!containerRoot) return;
+      let lastCompartmentRenderResult;
       const { container } = createVirtualContainer({
         containerRoot,
         onMutation: () => {
-          const newTree = jsDomNodeToSanitizedReactTree(container)
+          const newTree = compartmentTreeToSafeTree(container, lastCompartmentRenderResult, opts)
           setReactTree(newTree)
         }
       })
@@ -154,10 +212,15 @@ export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) 
       // which will trigger a rerender of the wrapper
       // which would rerender the child
       // so we need to memoize the child to break the loop
-      const MemoizedComponent = memo(Component, alternatePropsAreEqualFn)
+      const { propsAreEqual } = opts;
+      const MemoizedComponent = memo(Component, propsAreEqual);
+      const WrappedMemoizedComponent = (props) => {
+        lastCompartmentRenderResult = createElement(MemoizedComponent, props);
+        return lastCompartmentRenderResult;
+      }
       setVirtualEnvironment({
         container,
-        Component: MemoizedComponent,
+        Component: WrappedMemoizedComponent,
       });
     }, [])
 
@@ -178,18 +241,26 @@ export function withReactCompartmentPortal(Component, alternatePropsAreEqualFn) 
   }
 }
 
-export const ReactCompartmentPortal = withReactCompartmentPortal(({ children }) => {
-  return createElement(
-    React.Fragment,
-    null,
-    children
-  )
-})
+// export const ReactCompartmentRootFragment = withReactCompartmentRoot(({ children }) => {
+//   return createElement(
+//     React.Fragment,
+//     null,
+//     children
+//   )
+// })
 
-// TODO: this is not useful other than for testing
-// its rendering a fragment with opaque children
-// to the jsdom and then replacing the opaque children
-// with the real children when rending to the page
+// export const ReactCompartmentPortalFragment = withReactCompartmentPortal(({ children }) => {
+//   return createElement(
+//     React.Fragment,
+//     null,
+//     children
+//   )
+// })
+
+// // TODO: this is not useful other than for testing
+// // its rendering a fragment with opaque children
+// // to the jsdom and then replacing the opaque children
+// // with the real children when rending to the page
 export const ReactCompartmentOpaqueChildrenRoot = withReactCompartmentRoot(({ children }) => {
   return createElement(
     React.Fragment,
@@ -198,13 +269,13 @@ export const ReactCompartmentOpaqueChildrenRoot = withReactCompartmentRoot(({ ch
   )
 })
 
-export const ReactCompartmentOpaqueChildrenPortal = withReactCompartmentPortal(({ children }) => {
-  return createElement(
-    React.Fragment,
-    null,
-    Children.map(children, toOpaque)
-  )
-})
+// export const ReactCompartmentOpaqueChildrenPortal = withReactCompartmentPortal(({ children }) => {
+//   return createElement(
+//     React.Fragment,
+//     null,
+//     Children.map(children, toOpaque)
+//   )
+// })
 
 
 // creates a copy of a real event with mapped virtual elements

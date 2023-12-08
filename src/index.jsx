@@ -3,13 +3,20 @@ import { createRoot } from "react-dom/client";
 import { Hello } from "./Hello";
 import { ChatHistory } from "./ChatHistory";
 // import { useInterval } from "./useInterval";
-import { ReactCompartmentOpaqueChildrenPortal, ReactCompartmentOpaqueChildrenRoot, ReactCompartmentPortal, ReactCompartmentRoot, withReactCompartmentPortal, withReactCompartmentRoot } from "./Container";
-// const ReactCompartment = ({ children }) => {
-//   return children;
-// }
+import { ReactCompartmentOpaqueChildrenRoot, withReactCompartmentPortal, withReactCompartmentRoot } from "./Container";
+
 
 const PortalHello = withReactCompartmentPortal(Hello)
 const RootHello = withReactCompartmentRoot(Hello)
+
+const PortalInput = withReactCompartmentPortal('input', { inputsAreControlled: true })
+const RootInput = withReactCompartmentRoot('input', { inputsAreControlled: true })
+
+const PortalButton = withReactCompartmentPortal('button')
+const RootButton = withReactCompartmentRoot('button')
+
+const PortalChatHistory = withReactCompartmentPortal(ChatHistory)
+const RootChatHistory = withReactCompartmentRoot(ChatHistory)
 
 const App = () => {
   const [greeting, setGreeting] = useState('haay');
@@ -61,45 +68,35 @@ const App = () => {
 
   return (
     <>
-      <ReactCompartmentPortal>
-        <input
-          ref={onInputReady}
-          value={greeting}
-          onChange={onChange}
-          onKeyDown={onKeyDown}
-        />
-      </ReactCompartmentPortal>
-      <ReactCompartmentPortal>
-        <button onClick={submit}>submit</button>
-      </ReactCompartmentPortal>
-      
-      <ReactCompartmentPortal>
-        <Hello greeting={greeting}/>
-      </ReactCompartmentPortal>
-      <ReactCompartmentRoot>
-        <Hello greeting={greeting}/>
-      </ReactCompartmentRoot>
+      <input
+        value={greeting}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+      />
+      <button onClick={submit}>submit</button>
+
+      <RootInput
+        value={greeting}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+      />
+      {/* <RootButton onClick={submit}>submit</RootButton>
+
+      <PortalInput
+        value={greeting}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+      /> */}
+      <PortalButton onClick={submit}>submit</PortalButton>
 
       <PortalHello greeting={greeting}/>
-      <RootHello greeting={greeting}/>
+      {/* <RootHello greeting={greeting}/> */}
 
-      <ReactCompartmentOpaqueChildrenPortal>
-        <Hello greeting={greeting}/>
-      </ReactCompartmentOpaqueChildrenPortal>
+      <PortalChatHistory chatLog={chatLog}/>
+      {/* <RootChatHistory chatLog={chatLog}/> */}
+
       <ReactCompartmentOpaqueChildrenRoot>
-        <Hello greeting={greeting}/>
-      </ReactCompartmentOpaqueChildrenRoot>
-
-
-      <ReactCompartmentPortal>
-        <ChatHistory chatLog={chatLog}/>
-      </ReactCompartmentPortal>
-
-      <ReactCompartmentOpaqueChildrenPortal>
-        <ChatHistory chatLog={chatLog}/>
-      </ReactCompartmentOpaqueChildrenPortal>
-      <ReactCompartmentOpaqueChildrenRoot>
-        <ChatHistory chatLog={chatLog}/>
+        <PortalChatHistory chatLog={chatLog}/>
       </ReactCompartmentOpaqueChildrenRoot>
     </>
   )
