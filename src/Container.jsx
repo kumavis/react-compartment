@@ -84,7 +84,6 @@ const isControllableElement = (domHandlerNode) => {
     // has controllable attribute
     CONTROLLABLE_COMPONENT_ATTRIBUTES.some((propName) => propName in domHandlerNode.attribs)
   );
-  console.log('isControllableElement', result, domHandlerNode)
   return result
 }
 
@@ -138,45 +137,74 @@ const compartmentTreeToSafeTree = (jsDomNode, reactNode, opts) => {
       return reactNode
     },
   })
-  console.log('compartmentTreeToSafeTree', {
-    html,
-    safeHtml,
-    domTree,
-    reactTree,
-  })
+  // console.log('compartmentTreeToSafeTree', {
+  //   html,
+  //   safeHtml,
+  //   domTree,
+  //   reactTree,
+  // })
   return reactTree;
+}
+
+const useVirtualEnvironment = (Component, opts) => {
+  const [virtualEnvironment, setVirtualEnvironment] = useState(null)
+  const [reactTree, setReactTree] = useState(null)
+  // after the container is mounted, we can create a virtual container
+  const onContainerReady = useCallback((containerRoot) => {
+    if (!containerRoot) return;
+    let lastCompartmentRenderResult;
+    const { container } = createVirtualContainer({
+      containerRoot,
+      onMutation: () => {
+        const newTree = compartmentTreeToSafeTree(container, lastCompartmentRenderResult, opts)
+        setReactTree(newTree)
+      }
+    })
+    // When the wrapper renders it will rerender the child
+    // if the child makes a change to its jsdom it will trigger a mutation
+    // which will trigger a rerender of the wrapper
+    // which would rerender the child
+    // so we need to memoize the child to break the loop
+    const { propsAreEqual } = opts;
+    const MemoizedComponent = memo(Component, propsAreEqual);
+    const WrappedMemoizedComponent = (props) => {
+      lastCompartmentRenderResult = createElement(MemoizedComponent, props);
+      return lastCompartmentRenderResult;
+    }
+    const createVirtualPortal = (props) => {
+      return createPortal(
+        createElement(WrappedMemoizedComponent, props),
+        container,
+        'virtual-container'
+      )
+    }
+    let virtualRoot
+    const renderToRoot = (props) => {
+      if (!virtualRoot) {
+        virtualRoot = createRoot(container);
+      }
+      virtualRoot.render(createElement(WrappedMemoizedComponent, props))
+    }
+    setVirtualEnvironment({
+      createVirtualPortal,
+      renderToRoot,
+    });
+  }, [])
+
+  return {
+    virtualEnvironment,
+    reactTree,
+    onContainerReady,
+  }
 }
 
 
 export function withReactCompartmentRoot(Component, opts = {}) {
   return function ReactCompartmentWrapper(props) {
-    const [virtualEnvironment, setVirtualEnvironment] = useState(null)
-    const [reactTree, setReactTree] = useState(null)
+    const { virtualEnvironment, reactTree, onContainerReady } = useVirtualEnvironment(Component, opts)
 
-    // after the container is mounted, we can create a virtual container
-    const onContainerReady = useCallback((containerRoot) => {
-      if (!containerRoot) return;
-      let lastCompartmentRenderResult;
-      const { container } = createVirtualContainer({
-        containerRoot,
-        onMutation: () => {
-          const newTree = compartmentTreeToSafeTree(container, lastCompartmentRenderResult, opts)
-          setReactTree(newTree)
-        }
-      })
-      const virtualRoot = createRoot(container);
-      const { propsAreEqual } = opts;
-      const MemoizedComponent = memo(Component, propsAreEqual)
-      const render = (props) => {
-        lastCompartmentRenderResult = createElement(MemoizedComponent, props)
-        virtualRoot.render(lastCompartmentRenderResult)
-      }
-      setVirtualEnvironment({ render });
-    }, [])
-
-    if (virtualEnvironment) {
-      virtualEnvironment.render(props);
-    }
+    // render the confined component in jsdom via a root
+    virtualEnvironment?.renderToRoot(props);
 
     return (
       createElement('div', {
@@ -193,47 +221,14 @@ export function withReactCompartmentRoot(Component, opts = {}) {
 // parent compartments arent re-rendered when their children are
 export function withReactCompartmentPortal(Component, opts = {}) {
   return function ReactCompartmentWrapper(props) {
-    const [virtualEnvironment, setVirtualEnvironment] = useState(null)
-    const [reactTree, setReactTree] = useState(null)
-
-    // after the container is mounted, we can create a virtual container
-    const onContainerReady = useCallback((containerRoot) => {
-      if (!containerRoot) return;
-      let lastCompartmentRenderResult;
-      const { container } = createVirtualContainer({
-        containerRoot,
-        onMutation: () => {
-          const newTree = compartmentTreeToSafeTree(container, lastCompartmentRenderResult, opts)
-          setReactTree(newTree)
-        }
-      })
-      // When the wrapper renders it will rerender the child
-      // if the child makes a change to its jsdom it will trigger a mutation
-      // which will trigger a rerender of the wrapper
-      // which would rerender the child
-      // so we need to memoize the child to break the loop
-      const { propsAreEqual } = opts;
-      const MemoizedComponent = memo(Component, propsAreEqual);
-      const WrappedMemoizedComponent = (props) => {
-        lastCompartmentRenderResult = createElement(MemoizedComponent, props);
-        return lastCompartmentRenderResult;
-      }
-      setVirtualEnvironment({
-        container,
-        Component: WrappedMemoizedComponent,
-      });
-    }, [])
+    const { virtualEnvironment, reactTree, onContainerReady } = useVirtualEnvironment(Component, opts)
 
     return (
       createElement('div', {
         ref: onContainerReady,
       }, [
-        // render the virtual container in jsdom
-        virtualEnvironment && createPortal(
-          createElement(virtualEnvironment.Component, props),
-          virtualEnvironment.container,
-          'virtual-container'
-        ),
+        // render the confined component in jsdom via a portal
+        virtualEnvironment?.createVirtualPortal(props),
         // render the sandboxed html
         reactTree,
       ])
