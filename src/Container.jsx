@@ -1,12 +1,13 @@
-
-import { renderToString } from 'react-dom/server';
 import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
 import { createPortal } from 'react-dom';
 import { JSDOM } from 'jsdom';
-import React, { useCallback, useState, createElement } from 'react';
+import React, { useCallback, useState, createElement, memo, Children, useEffect, cloneElement } from 'react';
+import { createRoot } from 'react-dom/client';
 
 // FYI: in some cases in its code (not witnessed) react may use the global document
+// I think this is mostly for setting up debug helpers
+// To verify, React should be executed in a Compartment
 
 // DOMPurify.addHook(
 //   'beforeSanitizeElements',
@@ -18,34 +19,221 @@ import React, { useCallback, useState, createElement } from 'react';
 //   }
 // );
 
-export function ReactCompartment({ children } = {}) {
-  const [virtualContainer, setVirtualContainer] = useState(null)
-  
-  // after the section is mounted, we can create a virtual container
-  const onSectionReady = useCallback((containerRoot) => {
-    if (!containerRoot) return;
-    const { container } = createVirtualContainer({ containerRoot })
-    setVirtualContainer(container);
-  }, [])
+/*
+TODO:
+- [ ] namespace opaqueIdMap by ReactCompartment
+- [ ] use a Compartment in example
+- [ ] consider opaque props
+- [ ] example: demonstrate root vs portal
+- [ ] fix "controlled input" detection !!
+*/
 
-  // every pass we render to string, purify, and then render to vdom
-  const html = renderToString(children);
-  const safeHtml = DOMPurify.sanitize(html)
+const domToReactOptions = {
+  library: React,
+}
+
+const getRandomId = () => {
+  return Math.random().toString(36).substring(7);
+}
+
+const opaqueIdMap = new Map();
+
+const useCleanup = (callback) => {
+  useEffect(() => {
+    return callback;
+  }, [])
+}
+
+const opaqueElementPrefix = `x-opaque-`
+const opaqueElementPrefixCaps = opaqueElementPrefix.toUpperCase()
+const OpaqueElement = ({ opaqueElementId }) => {
+  useCleanup(() => {
+    opaqueIdMap.delete(opaqueElementId);
+  })
+  const elementName = `${opaqueElementPrefix}${opaqueElementId}`
+  return createElement(elementName, null);
+}
+
+const toOpaque = (element) => {
+  const opaqueElementId = getRandomId();
+  const opaqueElement = createElement(OpaqueElement, { opaqueElementId })
+  opaqueIdMap.set(opaqueElementId, element);
+  return opaqueElement;
+}
+
+const fromOpaqueId = (opaqueElementId) => {
+  if (!opaqueIdMap.has(opaqueElementId)) {
+    throw new Error('no match found for opaque element')
+  }
+  return opaqueIdMap.get(opaqueElementId);
+}
+
+// https://github.com/remarkablemark/html-react-parser/blob/84930100f5b96bc4f73fecaf6666143678494aa9/src/attributes-to-props.ts#L12-L13
+const CONTROLLABLE_COMPONENT_TAGS = ['input', 'select', 'textarea'];
+const CONTROLLABLE_COMPONENT_ATTRIBUTES = ['checked', 'value'];
+const valueOnlyInputTypes = {
+  reset: true,
+  submit: true,
+};
+
+const isControllableElement = (domHandlerNode) => {
+  const result = (
+    // is controllable component
+    CONTROLLABLE_COMPONENT_TAGS.includes(domHandlerNode.name) &&
+    // is NOT form submit/reset input type
+    !(domHandlerNode.name === 'input' && valueOnlyInputTypes[domHandlerNode.type]) &&
+    // has controllable attribute
+    CONTROLLABLE_COMPONENT_ATTRIBUTES.some((propName) => propName in domHandlerNode.attribs)
+  );
+  return result
+}
+
+const compartmentTreeToSafeTree = (jsDomNode, reactNode, opts) => {
+  const html = jsDomNode.innerHTML;
+  const safeHtml = DOMPurify.sanitize(html, {
+    CUSTOM_ELEMENT_HANDLING: {
+      tagNameCheck: (tagName) => tagName.startsWith(opaqueElementPrefix),
+    }
+  })
   const domTree = htmlToDOM(safeHtml, {
     lowerCaseAttributeNames: false
   })
-  const reactTree = domToReact(domTree, { library: React })
+  const reactTree = domToReact(domTree, {
+    ...domToReactOptions,
+    replace: (domHandlerNode) => {
+      // replace opaque elements with their real counterparts
+      if (domHandlerNode.name?.startsWith(opaqueElementPrefix)) {
+        const opaqueElementId = domHandlerNode.name.replace(opaqueElementPrefix, '')
+        return fromOpaqueId(opaqueElementId);
+      }
+      // workaround:
+      // controlled and uncontrollable elements (<input>) are rendered as the same html
+      // "domToReact" defaults to uncontrolled elements
+      // thats normally a good idea but we want to preserve the original intent
+      if (isControllableElement(domHandlerNode)) {
+        // TODO: we need to look at the original and see if it was controlled
+        // instead of using this hardcoded option
+        if (opts.inputsAreControlled) {
+          let reactNode = domToReact([domHandlerNode], domToReactOptions)
+          if ('value' in domHandlerNode.attribs) {
+            reactNode = cloneElement(reactNode, {
+              ...reactNode.props,
+              value: reactNode.props.defaultValue,
+              defaultValue: undefined,
+            })
+          }
+          if ('checked' in domHandlerNode.attribs) {
+            reactNode = cloneElement(reactNode, {
+              ...reactNode.props,
+              checked: reactNode.props.defaultChecked,
+              defaultChecked: undefined,
+            })
+          }
+          return reactNode
+        }
+      }
+    },
+  })
+  // console.log('compartmentTreeToSafeTree', {
+  //   html,
+  //   safeHtml,
+  //   domTree,
+  //   reactTree,
+  // })
+  return reactTree;
+}
 
-  return (
-    createElement('section', {
-      ref: onSectionReady,
-    }, [
-      // render the virtual container in jsdom
-      virtualContainer && createPortal(children, virtualContainer, 'virtual-container'),
-      // render the sandboxed html
-      reactTree,
-    ])
-  )
+const useVirtualEnvironment = (Component, opts) => {
+  const [virtualEnvironment, setVirtualEnvironment] = useState(null)
+  const [reactTree, setReactTree] = useState(null)
+  // after the container is mounted, we can create a virtual container
+  const onContainerReady = useCallback((containerRoot) => {
+    if (!containerRoot) return;
+    let lastCompartmentRenderResult;
+    const { container } = createVirtualContainer({
+      containerRoot,
+      onMutation: () => {
+        const newTree = compartmentTreeToSafeTree(container, lastCompartmentRenderResult, opts)
+        setReactTree(newTree)
+      }
+    })
+    // When the container renders it will rerender the confined component
+    // if the confined component makes a change to its jsdom it will trigger a mutation
+    // which will trigger a rerender of the container
+    // which would rerender the confined component
+    // so we need to memoize the confined component to break the loop
+    const WrappedComponent = ({ children, ...props }) => {
+      const opaqueChildren = Children.map(children, toOpaque);
+      lastCompartmentRenderResult = createElement(Component, props, opaqueChildren);
+      return lastCompartmentRenderResult;
+    }
+    const MemoizedWrappedComponent = memo(WrappedComponent, opts.propsAreEqual);
+    const createWrappedElement = (props) => {
+      return createElement(MemoizedWrappedComponent, props)
+    }
+    const createVirtualPortal = (props) => {
+      return createPortal(
+        createWrappedElement(props),
+        container,
+        'virtual-container'
+      )
+    }
+    let virtualRoot
+    const renderToRoot = (props) => {
+      if (!virtualRoot) {
+        virtualRoot = createRoot(container);
+      }
+      virtualRoot.render(createWrappedElement(props))
+    }
+    setVirtualEnvironment({
+      createVirtualPortal,
+      renderToRoot,
+    });
+  }, [])
+
+  return {
+    virtualEnvironment,
+    reactTree,
+    onContainerReady,
+  }
+}
+
+
+export function withReactCompartmentRoot(Component, opts = {}) {
+  return function ReactCompartmentWrapper(props) {
+    const { virtualEnvironment, reactTree, onContainerReady } = useVirtualEnvironment(Component, opts)
+
+    // render the confined component in jsdom via a root
+    virtualEnvironment?.renderToRoot(props);
+
+    return (
+      createElement('div', {
+        ref: onContainerReady,
+      }, [
+        // render the sandboxed html
+        reactTree,
+      ])
+    )
+  }
+}
+
+// this is the more correct model over a component will children because
+// parent compartments arent re-rendered when their children are
+export function withReactCompartmentPortal(Component, opts = {}) {
+  return function ReactCompartmentWrapper(props) {
+    const { virtualEnvironment, reactTree, onContainerReady } = useVirtualEnvironment(Component, opts)
+
+    return (
+      createElement('div', {
+        ref: onContainerReady,
+      }, [
+        // render the confined component in jsdom via a portal
+        virtualEnvironment?.createVirtualPortal(props),
+        // render the sandboxed html
+        reactTree,
+      ])
+    )
+  }
 }
 
 // creates a copy of a real event with mapped virtual elements
@@ -79,21 +267,41 @@ const mapEventToVirtual = (event, mapRealToVirtual) => {
 
 // creates a virtual dom for a containerized component
 // with event forwarding
-function createVirtualContainer ({ containerRoot }) {
-
+function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
+  // TODO: consider "JSDOM.fragment"
   const fakeDom = new JSDOM('<!doctype html><html><body></body></html>', {
     url: 'http://containerized-component.fake.website/',
   });
+  // console.log('new compartment dom', {
+  //   fakeDom,
+  //   log: () => {
+  //     return fakeDom.window.document.body.childNodes[0].innerHTML
+  //   }
+  // })
 
   const { document: compartmentDocument } = fakeDom.window;
   const container = compartmentDocument.createElement('div');
   container.id = 'root';
   compartmentDocument.body.appendChild(container);
 
+  const mutationObserver = new fakeDom.window.MutationObserver((mutations, observer) => {
+    onMutation();
+  });
+  mutationObserver.observe(container, {
+    attributes: true,
+    characterData: true,
+    childList: true,
+    subtree: true,
+    attributeOldValue: true,
+    characterDataOldValue: true
+  });
+
   const virtualToRealMap = new WeakMap();
   const realToVirtualMap = new WeakMap();
   realToVirtualMap.set(containerRoot, container);
   virtualToRealMap.set(container, containerRoot);
+  realToVirtualMap.set(document, compartmentDocument);
+  virtualToRealMap.set(compartmentDocument, document);
 
   // generic protocol for mapping across the real/virtual boundary
   // may not be sane! idk!
@@ -102,6 +310,7 @@ function createVirtualContainer ({ containerRoot }) {
     let knownAncestorCandidate = targetNode
     const path = []
     const pathKeys = []
+    // console.log('mapAcross 1.', targetNode, thisToThatMap === realToVirtualMap ? 'real2virt' : 'virt2real')
     // 1. establish known ancestor and path from ancestor to target
     while (knownAncestorCandidate !== ceilingNode) {
       if (thisToThatMap.has(knownAncestorCandidate)) {
@@ -109,7 +318,9 @@ function createVirtualContainer ({ containerRoot }) {
       }
       const parent = knownAncestorCandidate.parentNode;
       // element must not be in the dom yet (?)
+      // for example, a render may not yet have occurred
       if (!parent) {
+        // console.log('1 - missing parent', knownAncestorCandidate)
         return
       }
       path.push(knownAncestorCandidate)
@@ -118,13 +329,24 @@ function createVirtualContainer ({ containerRoot }) {
     }
     // 2. walk from mapped ancestor down path
     const knownAncestorThat = thisToThatMap.get(knownAncestorCandidate);
+    // console.log('mapAcross 2.', knownAncestorThat, pathKeys, thisToThatMap === realToVirtualMap ? 'real2virt' : 'virt2real')
     let currentThat = knownAncestorThat;
     while (path.length) {
       const childThis = path.pop();
       const childKey = pathKeys.pop();
       const childThat = currentThat.childNodes[childKey];
+      // if we encounter an opaque element, we can safely ignore it
+      // as we dont need to forward events to opaque elements
+      // this is because the responsibility for forwarding the
+      // event is handled elsewhere
+      // note: tag names are uppercase here
+      if (childThat.tagName.startsWith(opaqueElementPrefixCaps)) {
+        // console.log('2 - encountered opaque')
+        return
+      }
       // corresponding child is missing
       if (!childThat) {
+        // console.log('2 - missing childThat')
         return
       }
       thisToThatMap.set(childThis, childThat);
@@ -134,22 +356,19 @@ function createVirtualContainer ({ containerRoot }) {
     return currentThat;
   }
   const mapRealToVirtual = (realElement) => {
-    if (realElement === containerRoot) return container;
-    if (realElement === document) return compartmentDocument;
     if (realToVirtualMap.has(realElement)) return realToVirtualMap.get(realElement);
     const result = mapAcross(realElement, containerRoot, realToVirtualMap, virtualToRealMap);
-    if (!result) console.log('failed to map real to virtual', realElement)
+    // if (!result) console.log('failed to map real to virtual', realElement)
     return result;
   }
   const mapVirtualToReal = (virtualElement) => {
-    if (virtualElement === container) return containerRoot;
-    if (virtualElement === compartmentDocument) return document;
     if (virtualToRealMap.has(virtualElement)) return virtualToRealMap.get(virtualElement);
     const result = mapAcross(virtualElement, container, virtualToRealMap, realToVirtualMap);
-    if (!result) console.log('failed to map virtual to real', virtualElement)
+    // if (!result) console.log('failed to map virtual to real', virtualElement)
     return result;
   }
 
+  // TODO: need to ensure these are not shared across jsdom windows
   const EventTargetPrototype = fakeDom.window.EventTarget.prototype;
 
   EventTargetPrototype.addEventListener = function (eventName, listener, useCapture) {
