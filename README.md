@@ -4,7 +4,7 @@ status: experiment - not ready for production
 
 This is intended to achieve DOM sandboxing of react components.
 
-While defining a react component inside of a SES Compartment can prevent access to the DOM via global references, it doesnt prevent the component from later accessing the DOM via refs to the rendered elements. Since DOM nodes allow traversal of the entire DOM, this defeats the sandboxing normally provided by SES Compartments.
+While defining a react component inside of a SES Compartment can prevent access to the DOM via global references, it doesnt prevent the component from later accessing the DOM via refs or events that point to the rendered elements. Since DOM nodes allow traversal of the entire DOM, this defeats the sandboxing normally provided by SES Compartments.
 
 This experiment attempts to solve that issue.
 
