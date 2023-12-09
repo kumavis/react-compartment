@@ -21,12 +21,11 @@ import { createRoot } from 'react-dom/client';
 
 /*
 TODO:
-- [ ] fix event mapping bug, as seen when using the example input
 - [ ] namespace opaqueIdMap by ReactCompartment
-- [ ] improve example, use a Compartment
-- [ ] always treat children as opaque (?)
-- [ ] rename { ReactCompartmentRoot, ReactCompartmentPortal } as { RootFragment, PortalFragment }
+- [ ] use a Compartment in example
 - [ ] consider opaque props
+- [ ] example: demonstrate root vs portal
+- [ ] fix "controlled input" detection !!
 */
 
 const domToReactOptions = {
