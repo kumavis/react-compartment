@@ -45,8 +45,9 @@ const TodoItem = ({ task, setTask }) => {
 
 const TodoMaker = ({ setTasks }) => {
   const [description, setDescription] = useState('')
-  const onChange = useCallback(({ target: { value } }) => {
-    setDescription(value)
+  const onChange = useCallback((event) => {
+    // "event.target" will be the jsdom element for confined components
+    setDescription(event.target.value)
   }, [])
   const submit = useCallback(() => {
     setTasks(tasks => tasks.concat({
@@ -56,8 +57,8 @@ const TodoMaker = ({ setTasks }) => {
     }))
     setDescription('')
   })
-  const onKeyDown = useCallback(({ key }) => {
-    if (key === 'Enter') {
+  const onKeyDown = useCallback((event) => {
+    if (event.key === 'Enter') {
       submit()
     }
   }, [])
@@ -112,10 +113,7 @@ const App = () => {
         <h2 key='title'>Root</h2>
         <RootTodoList key='list'>
           {tasks.map(task => (
-            <>
-              <TodoItem key={`raw-${task.id}`} task={task} setTask={setTask}/>
-              <RootTodoItem key={`root-${task.id}`} task={task} setTask={setTask}/>
-            </>
+            <RootTodoItem key={`root-${task.id}`} task={task} setTask={setTask}/>
           ))}
         </RootTodoList>
         <RootTodoMaker key='maker' setTasks={setTasks}/>
@@ -125,10 +123,7 @@ const App = () => {
         <h2 key='title'>Portal</h2>
         <PortalTodoList key='list'>
           {tasks.map(task => (
-            <>
-              <TodoItem key={`raw-${task.id}`} task={task} setTask={setTask}/>
-              <PortalTodoItem key={`portal-${task.id}`} task={task} setTask={setTask}/>
-            </>
+            <PortalTodoItem key={`portal-${task.id}`} task={task} setTask={setTask}/>
           ))}
         </PortalTodoList>
         <PortalTodoMaker key='maker' setTasks={setTasks}/>

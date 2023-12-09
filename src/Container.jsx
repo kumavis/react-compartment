@@ -45,11 +45,13 @@ const useCleanup = (callback) => {
   }, [])
 }
 
+const opaqueElementPrefix = `x-opaque-`
+const opaqueElementPrefixCaps = opaqueElementPrefix.toUpperCase()
 const OpaqueElement = ({ opaqueElementId }) => {
   useCleanup(() => {
     opaqueIdMap.delete(opaqueElementId);
   })
-  const elementName = `x-opaque-${opaqueElementId}`
+  const elementName = `${opaqueElementPrefix}${opaqueElementId}`
   return createElement(elementName, null);
 }
 
@@ -91,7 +93,7 @@ const compartmentTreeToSafeTree = (jsDomNode, reactNode, opts) => {
   const html = jsDomNode.innerHTML;
   const safeHtml = DOMPurify.sanitize(html, {
     CUSTOM_ELEMENT_HANDLING: {
-      tagNameCheck: (tagName) => tagName.startsWith('x-opaque-'),
+      tagNameCheck: (tagName) => tagName.startsWith(opaqueElementPrefix),
     }
   })
   const domTree = htmlToDOM(safeHtml, {
@@ -101,8 +103,8 @@ const compartmentTreeToSafeTree = (jsDomNode, reactNode, opts) => {
     ...domToReactOptions,
     replace: (domHandlerNode) => {
       // replace opaque elements with their real counterparts
-      if (domHandlerNode.name?.startsWith('x-opaque-')) {
-        const opaqueElementId = domHandlerNode.name.replace('x-opaque-', '')
+      if (domHandlerNode.name?.startsWith(opaqueElementPrefix)) {
+        const opaqueElementId = domHandlerNode.name.replace(opaqueElementPrefix, '')
         return fromOpaqueId(opaqueElementId);
       }
       // workaround:
@@ -156,20 +158,23 @@ const useVirtualEnvironment = (Component, opts) => {
         setReactTree(newTree)
       }
     })
-    // When the wrapper renders it will rerender the child
-    // if the child makes a change to its jsdom it will trigger a mutation
-    // which will trigger a rerender of the wrapper
-    // which would rerender the child
-    // so we need to memoize the child to break the loop
-    const { propsAreEqual } = opts;
-    const MemoizedComponent = memo(Component, propsAreEqual);
-    const WrappedMemoizedComponent = (props) => {
-      lastCompartmentRenderResult = createElement(MemoizedComponent, props);
+    // When the container renders it will rerender the confined component
+    // if the confined component makes a change to its jsdom it will trigger a mutation
+    // which will trigger a rerender of the container
+    // which would rerender the confined component
+    // so we need to memoize the confined component to break the loop
+    const WrappedComponent = ({ children, ...props }) => {
+      const opaqueChildren = Children.map(children, toOpaque);
+      lastCompartmentRenderResult = createElement(Component, props, opaqueChildren);
       return lastCompartmentRenderResult;
+    }
+    const MemoizedWrappedComponent = memo(WrappedComponent, opts.propsAreEqual);
+    const createWrappedElement = (props) => {
+      return createElement(MemoizedWrappedComponent, props)
     }
     const createVirtualPortal = (props) => {
       return createPortal(
-        createElement(WrappedMemoizedComponent, props),
+        createWrappedElement(props),
         container,
         'virtual-container'
       )
@@ -179,7 +184,7 @@ const useVirtualEnvironment = (Component, opts) => {
       if (!virtualRoot) {
         virtualRoot = createRoot(container);
       }
-      virtualRoot.render(createElement(WrappedMemoizedComponent, props))
+      virtualRoot.render(createWrappedElement(props))
     }
     setVirtualEnvironment({
       createVirtualPortal,
@@ -232,43 +237,6 @@ export function withReactCompartmentPortal(Component, opts = {}) {
   }
 }
 
-// export const ReactCompartmentRootFragment = withReactCompartmentRoot(({ children }) => {
-//   return createElement(
-//     React.Fragment,
-//     null,
-//     children
-//   )
-// })
-
-// export const ReactCompartmentPortalFragment = withReactCompartmentPortal(({ children }) => {
-//   return createElement(
-//     React.Fragment,
-//     null,
-//     children
-//   )
-// })
-
-// // TODO: this is not useful other than for testing
-// // its rendering a fragment with opaque children
-// // to the jsdom and then replacing the opaque children
-// // with the real children when rending to the page
-export const ReactCompartmentOpaqueChildrenRoot = withReactCompartmentRoot(({ children }) => {
-  return createElement(
-    React.Fragment,
-    null,
-    Children.map(children, toOpaque)
-  )
-})
-
-// export const ReactCompartmentOpaqueChildrenPortal = withReactCompartmentPortal(({ children }) => {
-//   return createElement(
-//     React.Fragment,
-//     null,
-//     Children.map(children, toOpaque)
-//   )
-// })
-
-
 // creates a copy of a real event with mapped virtual elements
 const mapEventToVirtual = (event, mapRealToVirtual) => {
   const target = mapRealToVirtual(event.target)
@@ -305,6 +273,12 @@ function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
   const fakeDom = new JSDOM('<!doctype html><html><body></body></html>', {
     url: 'http://containerized-component.fake.website/',
   });
+  // console.log('new compartment dom', {
+  //   fakeDom,
+  //   log: () => {
+  //     return fakeDom.window.document.body.childNodes[0].innerHTML
+  //   }
+  // })
 
   const { document: compartmentDocument } = fakeDom.window;
   const container = compartmentDocument.createElement('div');
@@ -327,6 +301,8 @@ function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
   const realToVirtualMap = new WeakMap();
   realToVirtualMap.set(containerRoot, container);
   virtualToRealMap.set(container, containerRoot);
+  realToVirtualMap.set(document, compartmentDocument);
+  virtualToRealMap.set(compartmentDocument, document);
 
   // generic protocol for mapping across the real/virtual boundary
   // may not be sane! idk!
@@ -335,6 +311,7 @@ function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
     let knownAncestorCandidate = targetNode
     const path = []
     const pathKeys = []
+    // console.log('mapAcross 1.', targetNode, thisToThatMap === realToVirtualMap ? 'real2virt' : 'virt2real')
     // 1. establish known ancestor and path from ancestor to target
     while (knownAncestorCandidate !== ceilingNode) {
       if (thisToThatMap.has(knownAncestorCandidate)) {
@@ -342,7 +319,9 @@ function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
       }
       const parent = knownAncestorCandidate.parentNode;
       // element must not be in the dom yet (?)
+      // for example, a render may not yet have occurred
       if (!parent) {
+        // console.log('1 - missing parent', knownAncestorCandidate)
         return
       }
       path.push(knownAncestorCandidate)
@@ -351,13 +330,24 @@ function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
     }
     // 2. walk from mapped ancestor down path
     const knownAncestorThat = thisToThatMap.get(knownAncestorCandidate);
+    // console.log('mapAcross 2.', knownAncestorThat, pathKeys, thisToThatMap === realToVirtualMap ? 'real2virt' : 'virt2real')
     let currentThat = knownAncestorThat;
     while (path.length) {
       const childThis = path.pop();
       const childKey = pathKeys.pop();
       const childThat = currentThat.childNodes[childKey];
+      // if we encounter an opaque element, we can safely ignore it
+      // as we dont need to forward events to opaque elements
+      // this is because the responsibility for forwarding the
+      // event is handled elsewhere
+      // note: tag names are uppercase here
+      if (childThat.tagName.startsWith(opaqueElementPrefixCaps)) {
+        // console.log('2 - encountered opaque')
+        return
+      }
       // corresponding child is missing
       if (!childThat) {
+        // console.log('2 - missing childThat')
         return
       }
       thisToThatMap.set(childThis, childThat);
@@ -367,22 +357,19 @@ function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
     return currentThat;
   }
   const mapRealToVirtual = (realElement) => {
-    if (realElement === containerRoot) return container;
-    if (realElement === document) return compartmentDocument;
     if (realToVirtualMap.has(realElement)) return realToVirtualMap.get(realElement);
     const result = mapAcross(realElement, containerRoot, realToVirtualMap, virtualToRealMap);
-    if (!result) console.log('failed to map real to virtual', realElement)
+    // if (!result) console.log('failed to map real to virtual', realElement)
     return result;
   }
   const mapVirtualToReal = (virtualElement) => {
-    if (virtualElement === container) return containerRoot;
-    if (virtualElement === compartmentDocument) return document;
     if (virtualToRealMap.has(virtualElement)) return virtualToRealMap.get(virtualElement);
     const result = mapAcross(virtualElement, container, virtualToRealMap, realToVirtualMap);
-    if (!result) console.log('failed to map virtual to real', virtualElement)
+    // if (!result) console.log('failed to map virtual to real', virtualElement)
     return result;
   }
 
+  // TODO: need to ensure these are not shared across jsdom windows
   const EventTargetPrototype = fakeDom.window.EventTarget.prototype;
 
   EventTargetPrototype.addEventListener = function (eventName, listener, useCapture) {
