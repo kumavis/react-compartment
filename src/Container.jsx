@@ -132,10 +132,6 @@ const compartmentTreeToSafeTree = (jsDomNode, reactNode, opts) => {
         }
       }
     },
-    transform: (reactNode, domNode) => {
-      debugger
-      return reactNode
-    },
   })
   // console.log('compartmentTreeToSafeTree', {
   //   html,
