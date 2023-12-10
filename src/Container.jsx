@@ -26,6 +26,7 @@ TODO:
 - [ ] consider opaque props
 - [ ] example: demonstrate root vs portal
 - [ ] fix "controlled input" detection !!
+- [ ] use render completed callback instead of mutation observer
 */
 
 const domToReactOptions = {
@@ -88,17 +89,88 @@ const isControllableElement = (domHandlerNode) => {
   return result
 }
 
-const compartmentTreeToSafeTree = (jsDomNode, reactNode, opts) => {
-  const html = jsDomNode.innerHTML;
-  const safeHtml = DOMPurify.sanitize(html, {
+// this will likely be fragile to react updates
+const getInternalReactProps = (jsDomNode) => {
+  const reactPropsKey = Reflect.ownKeys(jsDomNode).find(key => key.startsWith('__reactProps'))
+  const props = jsDomNode[reactPropsKey];
+  return props;
+}
+
+const walkJsDomNode = (node, visitorFn) => {
+  visitorFn(node);
+  for (let child of node.childNodes) {
+    walkJsDomNode(child, visitorFn)
+  }
+}
+
+const getPathForJsDomNode = (jsDomNode, jsDomRoot) => {
+  const path = [];
+  let current = jsDomNode;
+  while (current !== jsDomRoot) {
+    const parent = current.parentNode;
+    const index = Array.prototype.indexOf.call(parent.childNodes, current);
+    path.push(index);
+    current = parent;
+  }
+  // reverse so its in order from top down
+  path.reverse();
+  return path;
+}
+
+const getControlledInputPaths = (jsDomRoot) => {
+  const controlledInputs = [];
+  walkJsDomNode(jsDomRoot, (node) => {
+    // check for input elements
+    if (node.tagName === 'INPUT') {
+      const props = getInternalReactProps(node);
+      // full set here:
+      // https://github.com/facebook/react/blob/40f653d13c363c6f81b13de67ce391991fb1f870/packages/react-dom-bindings/src/shared/ReactControlledValuePropTypes.js#L20
+      if ('value' in props) {
+        controlledInputs.push(node);
+      } else if ('checked' in props) {
+        controlledInputs.push(node);
+      }
+    }
+  })
+  const controlledInputPaths = controlledInputs.map(node => {
+    return getPathForJsDomNode(node, jsDomRoot)
+  })
+  return controlledInputPaths;
+}
+
+const getDomHandlerNodeForPath = (path, domHandlerRoot) => {
+  let current = domHandlerRoot;
+  for (let index of path) {
+    current = current.children[index];
+  }
+  return current;
+}
+
+const getControlledInputsInSanitizedDom = (jsDomRoot, domHandlerRoot) => {
+  const controlledInputPaths = getControlledInputPaths(jsDomRoot)
+  const controlledSanitizedInputs = controlledInputPaths.map(path => {
+    return getDomHandlerNodeForPath(path, domHandlerRoot)
+  })
+  return controlledSanitizedInputs;
+}
+
+const compartmentTreeToSafeTree = (jsDomRoot, reactNode, opts) => {
+  const unsafeHtmlString = jsDomRoot.innerHTML;
+  const safeHtmlString = DOMPurify.sanitize(unsafeHtmlString, {
     CUSTOM_ELEMENT_HANDLING: {
       tagNameCheck: (tagName) => tagName.startsWith(opaqueElementPrefix),
     }
   })
-  const domTree = htmlToDOM(safeHtml, {
+  const domHandlerRoots = htmlToDOM(safeHtmlString, {
     lowerCaseAttributeNames: false
   })
-  const reactTree = domToReact(domTree, {
+
+  // We need to check if <inputs> are controlled or not, as this information is not available
+  // in the DOM
+  const domHandlerRootFakeParent = { children: domHandlerRoots }
+  const controlledInputs = getControlledInputsInSanitizedDom(jsDomRoot, domHandlerRootFakeParent)
+
+  const reactTree = domToReact(domHandlerRoots, {
     ...domToReactOptions,
     replace: (domHandlerNode) => {
       // replace opaque elements with their real counterparts
@@ -111,15 +183,16 @@ const compartmentTreeToSafeTree = (jsDomNode, reactNode, opts) => {
       // "domToReact" defaults to uncontrolled elements
       // thats normally a good idea but we want to preserve the original intent
       if (isControllableElement(domHandlerNode)) {
-        // TODO: we need to look at the original and see if it was controlled
-        // instead of using this hardcoded option
-        if (opts.inputsAreControlled) {
+        if (controlledInputs.includes(domHandlerNode)) {
           let reactNode = domToReact([domHandlerNode], domToReactOptions)
           if ('value' in domHandlerNode.attribs) {
             reactNode = cloneElement(reactNode, {
               ...reactNode.props,
               value: reactNode.props.defaultValue,
               defaultValue: undefined,
+              // // We put a placeholder onChange handler here so that React doesn't complain
+              // // the actual change will be handled by the event forwarding
+              onChange: () => {},
             })
           }
           if ('checked' in domHandlerNode.attribs) {
@@ -335,6 +408,11 @@ function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
       const childThis = path.pop();
       const childKey = pathKeys.pop();
       const childThat = currentThat.childNodes[childKey];
+      // corresponding child is missing
+      if (!childThat) {
+        // console.log('2 - missing childThat')
+        return
+      }
       // if we encounter an opaque element, we can safely ignore it
       // as we dont need to forward events to opaque elements
       // this is because the responsibility for forwarding the
@@ -342,11 +420,6 @@ function createVirtualContainer ({ containerRoot, onMutation = ()=>{} }) {
       // note: tag names are uppercase here
       if (childThat.tagName.startsWith(opaqueElementPrefixCaps)) {
         // console.log('2 - encountered opaque')
-        return
-      }
-      // corresponding child is missing
-      if (!childThat) {
-        // console.log('2 - missing childThat')
         return
       }
       thisToThatMap.set(childThis, childThat);

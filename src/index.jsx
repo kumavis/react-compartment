@@ -16,6 +16,7 @@ const fixtureTask2 = {
 }
 
 const TodoList = ({ children }) => {
+  // children will be opaque elements for confined components
   return (
     <ul>
       {children}
@@ -77,11 +78,11 @@ const TodoMaker = ({ setTasks }) => {
 
 const RootTodoList = withReactCompartmentRoot(TodoList)
 const RootTodoItem = withReactCompartmentRoot(TodoItem)
-const RootTodoMaker = withReactCompartmentRoot(TodoMaker, { inputsAreControlled: true })
+const RootTodoMaker = withReactCompartmentRoot(TodoMaker)
 
 const PortalTodoList = withReactCompartmentPortal(TodoList)
 const PortalTodoItem = withReactCompartmentPortal(TodoItem)
-const PortalTodoMaker = withReactCompartmentPortal(TodoMaker, { inputsAreControlled: true })
+const PortalTodoMaker = withReactCompartmentPortal(TodoMaker)
 
 const App = () => {
   const [tasks, setTasks] = useState([
