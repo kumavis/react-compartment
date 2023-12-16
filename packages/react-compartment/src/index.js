@@ -2,8 +2,10 @@ import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
 import { createPortal } from 'react-dom';
 import { JSDOM } from 'jsdom';
-import React, { useCallback, useState, createElement, memo, Children, useEffect, cloneElement } from 'react';
+import React, { useCallback, useState, useEffect, useMemo, createElement, memo, Children, cloneElement } from 'react';
 import { createRoot } from 'react-dom/client';
+
+export { React, useCallback, useState, useEffect, useMemo, createElement, memo };
 
 // FYI: in some cases in its code (not witnessed) react may use the global document
 // I think this is mostly for setting up debug helpers
@@ -25,8 +27,8 @@ TODO:
 - [ ] use a Compartment in example
 - [ ] consider opaque props
 - [ ] example: demonstrate root vs portal
-- [ ] fix "controlled input" detection !!
-- [ ] use render completed callback instead of mutation observer
+- [ ] group all children into a single opaque element (per opts)
+- [ ] consider use of shadow dom instead of jsdom
 */
 
 const domToReactOptions = {

@@ -1,8 +1,9 @@
-import React, { useState, useCallback, useMemo } from "react";
+// import React, { useState, useCallback, useMemo } from "react";
 import { createRoot } from "react-dom/client";
-import { withReactCompartmentPortal, withReactCompartmentRoot } from "./Container";
+import { withReactCompartmentPortal, withReactCompartmentRoot } from "react-compartment";
 
-
+// this sucks but we get a warning from react if we dont reuse the same react instance
+import { React, useCallback, useState, useMemo } from "react-compartment";
 
 const fixtureTask1 = {
   id: 0,
