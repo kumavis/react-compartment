@@ -1,9 +1,9 @@
 import { domToReact, htmlToDOM } from 'html-react-parser';
 import * as DOMPurify from 'dompurify';
-import { createPortal } from 'react-dom';
 import { JSDOM } from 'jsdom';
 import React, { useCallback, useState, useEffect, useMemo, createElement, memo, Children, cloneElement } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
 
 export { React, useCallback, useState, useEffect, useMemo, createElement, memo };
 
