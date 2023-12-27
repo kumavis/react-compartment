@@ -1,0 +1,27 @@
+{
+  "name": "rc-example-todo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "webpack serve --open --config webpack/dev.js",
+    "stage": "webpack serve --open --config webpack/stage.js",
+    "build": "webpack --config webpack/prod.js"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-compartment": "*"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.5",
+    "@babel/preset-env": "^7.23.5",
+    "@babel/preset-react": "^7.23.3",
+    "babel-loader": "^9.1.3",
+    "html-webpack-plugin": "^5.5.4",
+    "node-polyfill-webpack-plugin": "^3.0.0",
+    "webpack": "^5.89.0",
+    "webpack-bundle-analyzer": "^4.10.1",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^4.15.1"
+  }
+}
