@@ -30,6 +30,11 @@ The jsdom is then serialized to an HTML string and processed through `dompurify`
 The sanitized HTML string is then turned back into a react tree, and rendered in the real DOM.
 This would normally trigger a re-render of the confined component, so it is wrapped in a memoization with `memo`.
 
+##### React Compartmentalization Options
+
+There are two ways of rendering react components outside of the normal DOM hierarchy, as we do when rendering to the sandboxed jsdom. For most cases you should use `withReactCompartmentRoot` which is backed by [`createRoot`](https://react.dev/reference/react-dom/client/createRoot). If need to access [react context](https://react.dev/learn/passing-data-deeply-with-context) You may want to use `withReactCompartmentPortal` which is backed by [`createPortal`](https://react.dev/reference/react-dom/createPortal).
+
+
 #### Transclusion
 
 Confined components that accept external children should not be able to inspect children.
